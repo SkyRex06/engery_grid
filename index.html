@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vertex Power Grid Control Center</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <style>
+        /* Custom dark theme colors and fonts */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* gray-900 */
+            color: #f9fafb; /* gray-50 */
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Orbitron:wght@400;700&display=swap');
+        .font-orbitron { font-family: 'Orbitron', sans-serif; }
+
+        /* Custom styles for dashboard widgets */
+        .widget {
+            background-color: #1f2937; /* gray-800 */
+            border-radius: 0.75rem;
+            border: 1px solid #374151; /* gray-700 */
+            transition: all 0.3s ease-in-out;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .widget-header {
+            padding: 0.75rem 1rem;
+            background-color: rgba(31, 41, 55, 0.5); /* gray-800 with opacity */
+            border-bottom: 1px solid #374151; /* gray-700 */
+        }
+
+        /* Leaflet map dark theme adjustments */
+        .leaflet-container {
+            background: #1f2937;
+        }
+        .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+            background: #1f2937;
+            color: #f9fafb;
+            border: 1px solid #4b5563;
+        }
+        .leaflet-tooltip {
+            background-color: #111827;
+            border: 1px solid #4b5563;
+            color: #f9fafb;
+        }
+
+        /* Custom animation for critical alerts */
+        @keyframes flash {
+            0%, 100% { background-color: #ef4444; }
+            50% { background-color: #b91c1c; }
+        }
+        .alert-critical {
+            animation: flash 1.5s infinite;
+        }
+
+        /* Scrollbar styling for a dark theme */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+
+        /* Drag-and-drop styles */
+        .widget.dragging {
+            opacity: 0.5;
+            border: 2px dashed #60a5fa;
+        }
+        .drop-zone {
+             background-color: rgba(96, 165, 250, 0.1);
+             border: 2px dashed #60a5fa;
+        }
+
+        /* Modal styling */
+        .modal {
+            transition: opacity 0.3s ease;
+        }
+    </style>
+</head>
+<body class="p-4">
+    <div id="dashboard-grid" class="grid grid-cols-1 lg:grid-cols-4 lg:grid-rows-3 gap-4 h-[calc(100vh-2rem)]">
+        
+        <div id="map-widget" class="widget lg:col-span-3 lg:row-span-2" draggable="true">
+            <div class="widget-header flex justify-between items-center">
+                <h2 class="text-lg font-bold text-blue-300">Grid GIS Overview</h2>
+                <div class="flex items-center space-x-4">
+                    <label class="flex items-center cursor-pointer"><input type="checkbox" id="toggle-plants" class="form-checkbox h-4 w-4 bg-gray-700 border-gray-600 text-blue-400 rounded focus:ring-blue-500" checked> <span class="ml-2 text-sm">Plants</span></label>
+                    <label class="flex items-center cursor-pointer"><input type="checkbox" id="toggle-substations" class="form-checkbox h-4 w-4 bg-gray-700 border-gray-600 text-blue-400 rounded focus:ring-blue-500" checked> <span class="ml-2 text-sm">Substations</span></label>
+                    <label class="flex items-center cursor-pointer"><input type="checkbox" id="toggle-lines" class="form-checkbox h-4 w-4 bg-gray-700 border-gray-600 text-blue-400 rounded focus:ring-blue-500" checked> <span class="ml-2 text-sm">Lines</span></label>
+                    <label class="flex items-center cursor-pointer"><input type="checkbox" id="toggle-weather" class="form-checkbox h-4 w-4 bg-gray-700 border-gray-600 text-blue-400 rounded focus:ring-blue-500"> <span class="ml-2 text-sm">Weather</span></label>
+                </div>
+            </div>
+            <div id="map" class="flex-grow w-full h-full rounded-b-lg"></div>
+        </div>
+
+        <div id="frequency-widget" class="widget" draggable="true">
+            <div class="widget-header"><h2 class="text-lg font-bold text-green-300">Grid Frequency</h2></div>
+            <div class="p-4 flex flex-col justify-center items-center flex-grow">
+                <div id="frequency-display" class="font-orbitron text-6xl font-bold text-green-400 transition-colors duration-500">50.00 Hz</div>
+                <div id="frequency-chart-container" class="w-full h-24 mt-4">
+                    <svg id="frequency-chart" class="w-full h-full" preserveAspectRatio="none"></svg>
+                </div>
+            </div>
+        </div>
+
+        <div id="load-widget" class="widget" draggable="true">
+            <div class="widget-header"><h2 class="text-lg font-bold text-yellow-300">Load & Demand</h2></div>
+            <div class="p-4 flex flex-col items-center justify-around flex-grow">
+                <div class="text-center">
+                    <div class="text-gray-400 text-sm">Current Grid Load</div>
+                    <div id="load-value" class="font-orbitron text-4xl font-bold text-yellow-400">25,000 MW</div>
+                </div>
+                <div id="demand-chart-container" class="w-full h-32 mt-2">
+                    <svg id="demand-chart" class="w-full h-full" preserveAspectRatio="none"></svg>
+                </div>
+            </div>
+        </div>
+        
+        <div id="generation-widget" class="widget" draggable="true">
+            <div class="widget-header"><h2 class="text-lg font-bold text-indigo-300">Generation Mix</h2></div>
+            <div class="p-4 flex items-center justify-center flex-grow">
+                 <div id="generation-chart-container" class="w-48 h-48 relative">
+                    <svg id="generation-chart" class="w-full h-full transform -rotate-90"></svg>
+                    <div id="total-generation" class="absolute inset-0 flex flex-col items-center justify-center text-center">
+                        <span class="text-3xl font-bold font-orbitron"></span>
+                        <span class="text-xs text-gray-400">Total MW</span>
+                    </div>
+                </div>
+                <div id="generation-legend" class="ml-6 text-sm space-y-2"></div>
+            </div>
+        </div>
+
+        <div id="lines-widget" class="widget" draggable="true">
+            <div class="widget-header"><h2 class="text-lg font-bold text-cyan-300">Transmission Lines</h2></div>
+            <div id="lines-list" class="p-2 flex-grow overflow-y-auto">
+                </div>
+        </div>
+
+        <div id="alerts-widget" class="widget" draggable="true">
+            <div class="widget-header flex justify-between items-center">
+                 <h2 class="text-lg font-bold text-red-400">Alerts & Alarms</h2>
+                 <button id="simulation-btn" class="px-3 py-1 text-xs font-semibold text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Simulation Mode</button>
+            </div>
+            <div id="alerts-list" class="p-2 flex-grow overflow-y-auto space-y-2">
+                </div>
+        </div>
+
+    </div>
+
+    <div id="details-modal" class="modal fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center hidden z-50 pointer-events-none opacity-0">
+        <div class="widget w-full max-w-lg -translate-y-10 transition-transform duration-300">
+            <div class="widget-header flex justify-between items-center">
+                <h2 id="modal-title" class="text-xl font-bold">Asset Details</h2>
+                <button id="modal-close-btn" class="text-gray-400 hover:text-white">&times;</button>
+            </div>
+            <div id="modal-content" class="p-6">
+                </div>
+        </div>
+    </div>
+
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+
+        // --- MOCK DATA AND STATE ---
+        let isSimulation = false;
+        let map;
+        const layerGroups = {
+            plants: L.layerGroup(),
+            substations: L.layerGroup(),
+            lines: L.layerGroup(),
+            weather: L.layerGroup(),
+        };
+        const lineLayers = {};
+
+        const assets = {
+            plants: [
+                { id: 'P01', name: 'Solaris Prime', type: 'Solar', location: [28.6139, 77.2090], capacity: 1500, output: 1200, status: 'Online' },
+                { id: 'P02', name: 'Windhelm', type: 'Wind', location: [28.7041, 77.1025], capacity: 2500, output: 2100, status: 'Online' },
+                { id: 'P03', name: 'Hydroflow Dam', type: 'Hydro', location: [28.5273, 77.1352], capacity: 3000, output: 2800, status: 'Online' },
+                { id: 'P04', name: 'Volcanus Thermal', type: 'Thermal', location: [28.6538, 77.2294], capacity: 5000, output: 4500, status: 'Online' },
+                { id: 'P05', name: 'Atomos Core', type: 'Nuclear', location: [28.5562, 77.2354], capacity: 8000, output: 7500, status: 'Online' },
+            ],
+            substations: [
+                { id: 'S01', name: 'North Hub', location: [28.7500, 77.1177], load: 85 },
+                { id: 'S02', name: 'East Gate', location: [28.6328, 77.2197], load: 92 },
+                { id: 'S03', name: 'South Point', location: [28.4595, 77.0266], load: 78 },
+                { id: 'S04', name: 'West Junction', location: [28.6692, 76.9845], load: 88 },
+            ],
+            lines: [
+                { id: 'L01', from: 'P04', to: 'S02', voltage: 400, load: 88, status: 'Normal' },
+                { id: 'L02', from: 'P02', to: 'S01', voltage: 400, load: 94, status: 'Warning' },
+                { id: 'L03', from: 'P03', to: 'S03', voltage: 765, load: 82, status: 'Normal' },
+                { id: 'L04', from: 'P05', to: 'S03', voltage: 765, load: 85, status: 'Normal' },
+                { id: 'L05', from: 'P01', to: 'S04', voltage: 220, load: 75, status: 'Normal' },
+                { id: 'L06', from: 'S01', to: 'S04', voltage: 220, load: 60, status: 'Normal' },
+                { id: 'L07', from: 'S02', to: 'S03', voltage: 400, load: 98, status: 'Fault' },
+            ]
+        };
+
+        let gridState = {
+            frequency: 50.00,
+            totalLoad: 25000,
+            frequencyHistory: Array(60).fill(50),
+            demandHistory: Array(24).fill(0).map(() => 24000 + Math.random() * 2000),
+            alerts: [
+                { severity: 'Info', message: 'System initialized and running.', time: new Date() }
+            ]
+        };
+
+        // --- UTILITY FUNCTIONS ---
+        const formatNumber = (num) => num.toLocaleString('en-US');
+        const getStatusColor = (status) => {
+            if (status === 'Normal') return '#22c55e'; // green-500
+            if (status === 'Warning') return '#f97316'; // orange-500
+            if (status === 'Fault') return '#ef4444'; // red-500
+            return '#6b7280'; // gray-500
+        };
+
+        // --- MAP INITIALIZATION ---
+        function initMap() {
+            map = L.map('map').setView([28.6139, 77.2090], 10);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                maxZoom: 19
+            }).addTo(map);
+
+            Object.values(layerGroups).forEach(group => group.addTo(map));
+            
+            setupMapToggles();
+            drawMapAssets();
+            initWeatherLayer();
+        }
+
+        // --- MAP ASSET DRAWING ---
+        function createPlantIcon(type) {
+            const colors = { Solar: '#f97316', Wind: '#38bdf8', Hydro: '#3b82f6', Thermal: '#facc15', Nuclear: '#a855f7' };
+            const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${colors[type] || '#fff'}" class="w-8 h-8 drop-shadow-lg"><path d="M12 2L1 21h22L12 2zm0 4l7 12H5l7-12z"/></svg>`;
+            return L.divIcon({
+                html: iconSvg,
+                className: '',
+                iconSize: [24, 24],
+                iconAnchor: [12, 24],
+                popupAnchor: [0, -24]
+            });
+        }
+        
+        function drawMapAssets() {
+            // Clear existing layers before redrawing
+            Object.values(layerGroups).forEach(group => group.clearLayers());
+            
+            assets.plants.forEach(p => {
+                const marker = L.marker(p.location, { icon: createPlantIcon(p.type) })
+                    .addTo(layerGroups.plants)
+                    .on('click', () => showAssetDetails(p));
+                marker.bindTooltip(`${p.name} (${p.type})`);
+            });
+
+            assets.substations.forEach(s => {
+                const icon = L.divIcon({
+                    html: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#0ea5e9" class="w-6 h-6"><path fill-rule="evenodd" d="M4.5 3.75a3 3 0 00-3 3v10.5a3 3 0 003 3h15a3 3 0 003-3V6.75a3 3 0 00-3-3h-15zm4.125 3a.75.75 0 000 1.5h6.75a.75.75 0 000-1.5h-6.75zm0 3.75a.75.75 0 000 1.5h6.75a.75.75 0 000-1.5h-6.75zm0 3.75a.75.75 0 000 1.5h6.75a.75.75 0 000-1.5h-6.75z" clip-rule="evenodd" /></svg>`,
+                    className: '', iconSize: [20, 20], iconAnchor: [10, 20]
+                });
+                const marker = L.marker(s.location, { icon: icon })
+                    .addTo(layerGroups.substations)
+                    .on('click', () => showAssetDetails(s));
+                marker.bindTooltip(`${s.name}`);
+            });
+
+            assets.lines.forEach(l => {
+                const fromAsset = assets.plants.find(p => p.id === l.from) || assets.substations.find(s => s.id === l.from);
+                const toAsset = assets.substations.find(s => s.id === l.to);
+                if (!fromAsset || !toAsset) return;
+
+                const polyline = L.polyline([fromAsset.location, toAsset.location], {
+                    color: getStatusColor(l.status),
+                    weight: Math.max(2, l.load / 25)
+                }).addTo(layerGroups.lines).on('click', () => showAssetDetails(l));
+                polyline.bindTooltip(`Line ${l.id}: ${l.load}% Load`);
+                lineLayers[l.id] = polyline;
+            });
+        }
+        
+        function setupMapToggles() {
+            document.getElementById('toggle-plants').addEventListener('change', (e) => toggleLayer(e.target.checked, layerGroups.plants));
+            document.getElementById('toggle-substations').addEventListener('change', (e) => toggleLayer(e.target.checked, layerGroups.substations));
+            document.getElementById('toggle-lines').addEventListener('change', (e) => toggleLayer(e.target.checked, layerGroups.lines));
+            document.getElementById('toggle-weather').addEventListener('change', (e) => toggleLayer(e.target.checked, layerGroups.weather));
+        }
+
+        function toggleLayer(isVisible, layerGroup) {
+            if (isVisible) {
+                map.addLayer(layerGroup);
+            } else {
+                map.removeLayer(layerGroup);
+            }
+        }
+
+        function initWeatherLayer() {
+            // Mock weather overlay (e.g., cloud cover)
+            const bounds = L.latLngBounds([28.4, 76.9], [28.8, 77.4]);
+            const imageUrl = 'https://i.imgur.com/Acb27I3.png'; // A semi-transparent cloud image
+            const weatherOverlay = L.imageOverlay(imageUrl, bounds, { opacity: 0.5 });
+            weatherOverlay.addTo(layerGroups.weather);
+            map.removeLayer(layerGroups.weather); // Initially hidden
+        }
+        
+        // --- DASHBOARD WIDGET UPDATES ---
+
+        function updateFrequencyWidget() {
+            const display = document.getElementById('frequency-display');
+            display.textContent = `${gridState.frequency.toFixed(2)} Hz`;
+            
+            if (gridState.frequency > 50.1 || gridState.frequency < 49.9) {
+                display.className = 'font-orbitron text-6xl font-bold text-orange-400 transition-colors duration-500';
+            } else if (gridState.frequency > 50.2 || gridState.frequency < 49.8) {
+                display.className = 'font-orbitron text-6xl font-bold text-red-500 transition-colors duration-500';
+            } else {
+                display.className = 'font-orbitron text-6xl font-bold text-green-400 transition-colors duration-500';
+            }
+
+            // Update frequency chart
+            const chart = document.getElementById('frequency-chart');
+            const points = gridState.frequencyHistory.map((val, i) => {
+                const x = (i / (gridState.frequencyHistory.length - 1)) * 100;
+                const y = 100 - ((val - 49.5) / 1) * 100; // Scale from 49.5Hz to 50.5Hz
+                return `${x},${y}`;
+            }).join(' ');
+            chart.innerHTML = `<polyline points="${points}" fill="none" stroke="#22c55e" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+        }
+        
+        function updateLoadWidget() {
+            document.getElementById('load-value').textContent = `${formatNumber(Math.round(gridState.totalLoad))} MW`;
+            
+            // Update demand chart
+            const chart = document.getElementById('demand-chart');
+            const maxDemand = Math.max(...gridState.demandHistory) * 1.1;
+            const points = gridState.demandHistory.map((val, i) => {
+                const x = (i / (gridState.demandHistory.length - 1)) * 100;
+                const y = 100 - (val / maxDemand) * 100;
+                return `${x},${y}`;
+            }).join(' ');
+            chart.innerHTML = `<polyline points="${points}" fill="none" stroke="#facc15" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+        }
+        
+        function updateGenerationWidget() {
+            const plantTypes = {};
+            let totalOutput = 0;
+            assets.plants.forEach(p => {
+                if (p.status === 'Online') {
+                    if (!plantTypes[p.type]) plantTypes[p.type] = 0;
+                    plantTypes[p.type] += p.output;
+                    totalOutput += p.output;
+                }
+            });
+
+            document.querySelector('#total-generation span:first-child').textContent = formatNumber(Math.round(totalOutput));
+            
+            const chart = document.getElementById('generation-chart');
+            const legend = document.getElementById('generation-legend');
+            chart.innerHTML = '';
+            legend.innerHTML = '';
+            
+            const colors = { Solar: '#f97316', Wind: '#38bdf8', Hydro: '#3b82f6', Thermal: '#facc15', Nuclear: '#a855f7' };
+            const radius = 45;
+            const circumference = 2 * Math.PI * radius;
+            let offset = 0;
+
+            Object.entries(plantTypes).forEach(([type, output]) => {
+                const percentage = (output / totalOutput);
+                const strokeDasharray = `${percentage * circumference} ${circumference}`;
+
+                const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                circle.setAttribute('cx', '50%');
+                circle.setAttribute('cy', '50%');
+                circle.setAttribute('r', radius);
+                circle.setAttribute('fill', 'none');
+                circle.setAttribute('stroke', colors[type]);
+                circle.setAttribute('stroke-width', '10');
+                circle.setAttribute('stroke-dasharray', strokeDasharray);
+                circle.setAttribute('stroke-dashoffset', -offset);
+                chart.appendChild(circle);
+
+                offset += percentage * circumference;
+
+                legend.innerHTML += `
+                    <div class="flex items-center">
+                        <span class="w-3 h-3 rounded-full mr-2" style="background-color: ${colors[type]}"></span>
+                        <span>${type}</span>
+                        <span class="ml-auto font-semibold">${(percentage * 100).toFixed(1)}%</span>
+                    </div>
+                `;
+            });
+        }
+
+        function updateLinesWidget() {
+            const list = document.getElementById('lines-list');
+            list.innerHTML = assets.lines.map(l => {
+                const statusColors = { Normal: 'bg-green-500/20 text-green-300', Warning: 'bg-orange-500/20 text-orange-300', Fault: 'bg-red-500/20 text-red-400' };
+                return `
+                    <div class="grid grid-cols-4 gap-2 p-2 rounded-md ${statusColors[l.status]} text-sm">
+                        <span class="font-bold">L-${l.id.padStart(2,'0')}</span>
+                        <span>${l.status}</span>
+                        <span>Load: ${l.load}%</span>
+                        <span>${l.voltage} kV</span>
+                    </div>
+                `;
+            }).join('');
+
+            // Also update map line colors
+            assets.lines.forEach(l => {
+                if(lineLayers[l.id]) {
+                    lineLayers[l.id].setStyle({ 
+                        color: getStatusColor(l.status),
+                        weight: Math.max(2, l.load / 25)
+                    });
+                }
+            });
+        }
+        
+        function updateAlertsWidget() {
+            const list = document.getElementById('alerts-list');
+            list.innerHTML = gridState.alerts.slice().reverse().map(a => {
+                const severityClasses = {
+                    Critical: 'border-l-4 border-red-500 alert-critical',
+                    Warning: 'border-l-4 border-orange-400',
+                    Info: 'border-l-4 border-blue-400'
+                };
+                const severityText = {
+                    Critical: 'text-red-400',
+                    Warning: 'text-orange-300',
+                    Info: 'text-blue-300'
+                };
+                return `
+                    <div class="p-2 rounded-md bg-gray-900/50 ${severityClasses[a.severity]}">
+                        <div class="flex justify-between items-start">
+                            <p class="text-sm pr-2"><strong class="${severityText[a.severity]}">[${a.severity}]</strong> ${a.message}</p>
+                            <span class="text-xs text-gray-400 whitespace-nowrap">${a.time.toLocaleTimeString()}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // --- INTERACTIVITY: MODAL ---
+        const modal = document.getElementById('details-modal');
+        const modalContent = document.getElementById('modal-content');
+        const modalTitle = document.getElementById('modal-title');
+        
+        function showAssetDetails(asset) {
+            let content = '';
+            // It's a Plant
+            if (asset.capacity) {
+                modalTitle.textContent = `${asset.name} Details`;
+                content = `
+                    <p><strong>ID:</strong> ${asset.id}</p>
+                    <p><strong>Type:</strong> ${asset.type}</p>
+                    <p><strong>Status:</strong> <span class="font-semibold ${asset.status === 'Online' ? 'text-green-400' : 'text-red-400'}">${asset.status}</span></p>
+                    <p><strong>Capacity:</strong> ${formatNumber(asset.capacity)} MW</p>
+                    <p><strong>Current Output:</strong> ${formatNumber(asset.output)} MW</p>
+                `;
+            // It's a Substation
+            } else if (asset.load && !asset.voltage) {
+                 modalTitle.textContent = `${asset.name} Details`;
+                 content = `
+                    <p><strong>ID:</strong> ${asset.id}</p>
+                    <p><strong>Current Load:</strong> ${asset.load}%</p>
+                 `;
+            // It's a Line
+            } else {
+                modalTitle.textContent = `Line ${asset.id} Details`;
+                const statusColor = getStatusColor(asset.status).replace('#', '');
+                content = `
+                    <p><strong>Status:</strong> <span class="font-semibold" style="color:#${statusColor}">${asset.status}</span></p>
+                    <p><strong>Load:</strong> ${asset.load}%</p>
+                    <p><strong>Voltage:</strong> ${asset.voltage} kV</p>
+                    <p><strong>Path:</strong> ${asset.from} &rarr; ${asset.to}</p>
+                    <div class="mt-4">
+                        <button class="px-4 py-2 text-sm font-semibold text-white bg-green-600 rounded-md hover:bg-green-700 w-full">Reroute Power (Simulated)</button>
+                    </div>
+                `;
+            }
+
+            modalContent.innerHTML = content;
+            modal.classList.remove('hidden', 'pointer-events-none', 'opacity-0');
+            modal.querySelector('.widget').classList.remove('-translate-y-10');
+        }
+
+        function closeModal() {
+            modal.querySelector('.widget').classList.add('-translate-y-10');
+            modal.classList.add('opacity-0');
+            setTimeout(() => {
+                modal.classList.add('hidden', 'pointer-events-none');
+            }, 300);
+        }
+
+        document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+        
+        // --- INTERACTIVITY: DRAG & DROP ---
+        const grid = document.getElementById('dashboard-grid');
+        let draggedItem = null;
+        
+        grid.addEventListener('dragstart', (e) => {
+            if (e.target.classList.contains('widget')) {
+                draggedItem = e.target;
+                setTimeout(() => e.target.classList.add('dragging'), 0);
+            }
+        });
+
+        grid.addEventListener('dragend', (e) => {
+            if (draggedItem) {
+                draggedItem.classList.remove('dragging');
+                draggedItem = null;
+            }
+        });
+
+        grid.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const target = e.target.closest('.widget');
+            if (target && target !== draggedItem) {
+                const rect = target.getBoundingClientRect();
+                const nextSibling = (e.clientY > rect.top + rect.height / 2) ? target.nextSibling : target;
+                grid.insertBefore(draggedItem, nextSibling);
+            }
+        });
+
+        // --- SIMULATION LOGIC ---
+        let originalState = {};
+
+        document.getElementById('simulation-btn').addEventListener('click', () => {
+            isSimulation = !isSimulation;
+            const btn = document.getElementById('simulation-btn');
+            if (isSimulation) {
+                btn.textContent = 'Exit Simulation';
+                btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+                btn.classList.add('bg-red-600', 'hover:bg-red-700');
+                
+                // Save original state and run a scenario
+                originalState.lines = JSON.parse(JSON.stringify(assets.lines));
+                originalState.plants = JSON.parse(JSON.stringify(assets.plants));
+                addAlert('Warning', 'Simulation Mode Activated. Running "Plant Offline" scenario.');
+                
+                // Scenario: Take Volcanus Thermal offline
+                const plant = assets.plants.find(p => p.id === 'P04');
+                if(plant) {
+                    plant.status = 'Offline';
+                    plant.output = 0;
+                }
+                // Simulate consequence: Overload line L02
+                const line = assets.lines.find(l => l.id === 'L02');
+                if(line) {
+                    line.load = 105; // This will trigger status change in update loop
+                    line.status = 'Fault'
+                }
+                addAlert('Critical', 'Predicted fault on Line L02 due to rerouted load.');
+            } else {
+                btn.textContent = 'Simulation Mode';
+                btn.classList.remove('bg-red-600', 'hover:bg-red-700');
+                btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                
+                // Restore original state
+                assets.lines = originalState.lines;
+                assets.plants = originalState.plants;
+                addAlert('Info', 'Exited Simulation Mode. Restored live data.');
+            }
+        });
+        
+        function addAlert(severity, message) {
+            gridState.alerts.push({ severity, message, time: new Date() });
+            if (gridState.alerts.length > 20) gridState.alerts.shift();
+            updateAlertsWidget();
+        }
+
+        // --- MAIN DATA SIMULATION LOOP ---
+        function simulateData() {
+            if (isSimulation) return; // Don't randomize data in simulation mode
+
+            // Fluctuate frequency
+            gridState.frequency += (Math.random() - 0.5) * 0.05;
+            gridState.frequency = Math.max(49.7, Math.min(50.3, gridState.frequency));
+            gridState.frequencyHistory.push(gridState.frequency);
+            if (gridState.frequencyHistory.length > 60) gridState.frequencyHistory.shift();
+
+            // Fluctuate plant outputs and total load
+            let currentTotalLoad = 0;
+            assets.plants.forEach(p => {
+                if (p.status === 'Online') {
+                    p.output += (Math.random() - 0.5) * (p.capacity / 100);
+                    p.output = Math.max(0, Math.min(p.capacity, p.output));
+                    currentTotalLoad += p.output;
+                }
+            });
+            gridState.totalLoad = currentTotalLoad;
+            
+            gridState.demandHistory.push(gridState.totalLoad * (0.98 + Math.random() * 0.04));
+            if (gridState.demandHistory.length > 24) gridState.demandHistory.shift();
+            
+            // Fluctuate line loads and check for status changes
+            assets.lines.forEach(l => {
+                if(l.status !== 'Fault') {
+                    l.load += (Math.random() - 0.5) * 2;
+                    l.load = Math.max(50, Math.min(105, l.load));
+                    if (l.load > 98) l.status = 'Fault';
+                    else if (l.load > 92) l.status = 'Warning';
+                    else l.status = 'Normal';
+                }
+            });
+            
+            // Randomly trigger an event
+            if (Math.random() < 0.01) {
+                const line = assets.lines[Math.floor(Math.random() * assets.lines.length)];
+                if(line.status !== 'Fault'){
+                    line.status = 'Fault';
+                    line.load = 100 + Math.random() * 5;
+                    addAlert('Critical', `Sudden fault detected on Line ${line.id}.`);
+                }
+            }
+        }
+        
+        // --- INITIALIZATION & MAIN LOOP ---
+        function updateAllWidgets() {
+            updateFrequencyWidget();
+            updateLoadWidget();
+            updateGenerationWidget();
+            updateLinesWidget();
+            updateAlertsWidget();
+        }
+
+        initMap();
+        updateAllWidgets();
+        
+        setInterval(() => {
+            simulateData();
+            updateAllWidgets();
+        }, 2000);
+    });
+    </script>
+</body>
+</html>
